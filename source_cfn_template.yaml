@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  TargetAWSAccountNumber:
+    Type: String
+    Description: 'The account number of the target account'
+    MinLength: '12'
+    MaxLength: '12'
+    AllowedPattern: '[0-9]{12}'
+    ConstraintDescription: 'Must be a valid AWS account number'
+  SourceDynamoDBTableName:
+    Type: String
+    Description: 'The name of the DynamoDB table'
+  TargetDynamoDBTableName:
+    Type: String
+    Description: 'The name of the DynamoDB table in the target account'
+  TargetRegion:
+    Type: String
+    Description: 'The region of the target account'
+    Default: 'us-east-1'
+  SourceUserType:
+    Type: String
+    AllowedValues:
+      - user
+      - role
+    Description: 'Indicate whether the source principal is a user or role'
+  SourceUserOrRoleName:
+    Type: String
+    Description: 'The name of the principal user or role in the source account'
+  
+  
+Conditions:
+  IsUser: !Equals [ !Ref SourceUserType, 'user' ]
+  IsRole: !Equals [ !Ref SourceUserType, 'role' ]
+
+Resources:
+  DynamodbCrossAccountCdcLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+  LambdaExecutePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: lambda-execute-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: 'arn:aws:logs:*:*:*'
+      Roles:
+        - !Ref DynamodbCrossAccountCdcLambdaRole
+  DynamodbStreamReadPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: dynamodbstream-read-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'dynamodb:DescribeStream'
+              - 'dynamodb:GetRecords'
+              - 'dynamodb:GetShardIterator'
+              - 'dynamodb:ListStreams'
+            Resource: 
+              Fn::Sub: "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SourceDynamoDBTableName}/stream/*"
+      Roles:
+        - !Ref DynamodbCrossAccountCdcLambdaRole
+  TargetDynamodbTableAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: target_dynamodb_table_access_policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'dynamodb:PutItem'
+              - 'dynamodb:DeleteItem'
+            Resource: 
+              Fn::Sub: "arn:aws:dynamodb:${TargetRegion}:${TargetAWSAccountNumber}:table/${TargetDynamoDBTableName}"
+      Roles:
+        - !Ref DynamodbCrossAccountCdcLambdaRole 
+  SQSSendMessagePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: sqs-send-message-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sqs:SendMessage'
+            Resource: 
+              Fn::GetAtt: [SQSQueueForFailedEvents, Arn]
+      Roles:
+        - !Ref DynamodbCrossAccountCdcLambdaRole      
+  KMSEncryptionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: kms-encryption-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey*'
+            Resource:
+              Fn::GetAtt: [KMSKeyForSQS, Arn]
+      Roles:
+        - !Ref DynamodbCrossAccountCdcLambdaRole
+  KMSKeyForSQS:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: "KMS Key for SQS Encryption"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: KeyPolicy
+        Statement:
+          - Sid: AllowSQSToUseKey
+            Effect: Allow
+            Principal:
+              Service: sqs.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+            Resource: "*"
+          - Sid: AllowKeyOwnerToManageKey
+            Effect: Allow
+            Principal:
+              AWS:  !If [IsUser, !Sub 'arn:aws:iam::${AWS::AccountId}:user/${SourceUserOrRoleName}', !Sub 'arn:aws:iam::${AWS::AccountId}:role/${SourceUserOrRoleName}']
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:TagResource
+              - kms:UntagResource
+            Resource: "*"
+          - Sid: AllowLambdaToUseKey
+            Effect: Allow
+            Principal: 
+              AWS: !GetAtt DynamodbCrossAccountCdcLambdaRole.Arn
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: "*"
+  DQLForFailedEvents:
+      Type: 'AWS::SQS::Queue'
+      Properties:
+        QueueName: dynamodb-cross-account-cdc-failed-events-dlq
+        KmsMasterKeyId: !GetAtt KMSKeyForSQS.Arn
+        VisibilityTimeout: 300
+        MessageRetentionPeriod: 1209600
+  SQSQueueForFailedEvents:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName: dynamodb-cross-account-cdc-failed-events-queue
+      KmsMasterKeyId: !GetAtt KMSKeyForSQS.Arn
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DQLForFailedEvents.Arn
+        maxReceiveCount: 5
+  DynamodbCrossAccountCdcLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: dynamodb-cross-account-cdc-lambda-function
+      Role: !GetAtt DynamodbCrossAccountCdcLambdaRole.Arn
+      Code:
+        S3Bucket:
+          Fn::Sub: "lambda-code-bucket-${AWS::AccountId}"
+        S3Key: function.zip
+      Handler: dynamodb-cross-account-cdc-lambda-function.lambda_handler
+      Runtime: python3.9
+      Timeout: 10
+      MemorySize: 128
+      Architectures:
+      - x86_64
+      TracingConfig:
+        Mode: Active
+      ReservedConcurrentExecutions: 10
+      Description: Lambda function to capture change data capture (CDC) for DynamoDB table across accounts
+      Environment:
+        Variables:
+          LOG_LEVEL: INFO
+          TARGET_AWS_ACCOUNT_NUMBER: !Ref TargetAWSAccountNumber
+          TARGET_DYNAMODB_TABLE_NAME: !Ref TargetDynamoDBTableName
+          TARGET_REGION: !Ref TargetRegion
+          SQS_QUEUE_URL_FOR_FAILED_EVENTS: !GetAtt SQSQueueForFailedEvents.QueueUrl
+          EXPORT_TIME: '1900-01-01 00:00:00-0000'
+  AssumeRolePolicyDocumentForUser:
+    Type: 'AWS::IAM::UserPolicy'
+    Condition: IsUser
+    Properties:
+      PolicyName: assume_role_for_user_policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Resource: 
+              Fn::Sub: "arn:aws:iam::${TargetAWSAccountNumber}:role/cross_account_assume_role"
+      UserName: !Ref SourceUserOrRoleName
+  AssumeRolePolicyDocumentForRole:
+    Type: 'AWS::IAM::RolePolicy'
+    Condition: IsRole
+    Properties:
+      PolicyName: assume_role_for_role_policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Resource: 
+              Fn::Sub: "arn:aws:iam::${TargetAWSAccountNumber}:role/cross_account_assume_role"
+      RoleName: !Ref SourceUserOrRoleName
+  
+
+Outputs:
+  DynamoDBCDCFunctionArn:
+    Description: 'ARN of the DynamoDB CDC Lambda function'
+    Value: !GetAtt DynamodbCrossAccountCdcLambdaFunction.Arn
+  

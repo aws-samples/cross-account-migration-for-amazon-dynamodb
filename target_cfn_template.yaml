@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  SourceAWSAccountNumber:
+    Type: String
+    Description: 'The account number of the source account'
+    MinLength: '12'
+    MaxLength: '12'
+    AllowedPattern: '[0-9]{12}'
+    ConstraintDescription: 'Must be a valid AWS account number'
+  TargetDynamoDBTableName:
+    Type: String
+    Description: 'The name of the DynamoDB table in the target account'
+  SourceUserType:
+    Type: String
+    Description: 'The type of the source user - user or role'
+    AllowedValues:
+      - user
+      - role
+  SourceUserOrRoleName:
+    Type: String
+    Description: 'The name of the principal user or role in the source account'
+  
+
+Conditions:
+  IsUser:
+    Fn::Equals:
+      - !Ref SourceUserType
+      - user
+Resources:
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'dynamodb-export-to-s3-${AWS::Region}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      ObjectLockEnabled: true
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LoggingBucket
+        LogFilePrefix: ddb-export-logs
+      VersioningConfiguration:
+        Status: Enabled
+  S3BucketPolicy:
+      Type: 'AWS::S3::BucketPolicy'
+      Properties:
+        Bucket: !Ref S3Bucket
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                AWS: !If [IsUser, !Sub 'arn:aws:iam::${SourceAWSAccountNumber}:user/${SourceUserOrRoleName}', !Sub 'arn:aws:iam::${SourceAWSAccountNumber}:role/${SourceUserOrRoleName}']
+              Action:
+                - 's3:PutObject'
+              Resource: !Sub 'arn:aws:s3:::dynamodb-export-to-s3-${AWS::Region}-${AWS::AccountId}/*'
+  LoggingBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+  S3LoggingBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref LoggingBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 's3:PutObject'
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref LoggingBucket
+                - /*
+            Condition:
+              ArnLike:
+                'aws:SourceArn': !GetAtt 
+                  - S3Bucket
+                  - Arn
+              StringEquals:
+                'aws:SourceAccount': !Sub '${AWS::AccountId}'
+  CrossAccountAssumeRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: 'cross_account_assume_role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: 
+                - !If [IsUser, !Sub 'arn:aws:iam::${SourceAWSAccountNumber}:user/${SourceUserOrRoleName}', !Sub 'arn:aws:iam::${SourceAWSAccountNumber}:role/${SourceUserOrRoleName}']
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: 'DynamoDB-write-access-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:ImportTable'
+                  - 'dynamodb:DescribeTable'
+                  - 'dynamodb:DescribeImport'
+                  - 'dynamodb:PutResourcePolicy'
+                Resource: 
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TargetDynamoDBTableName}'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TargetDynamoDBTableName}/import/*'
+        - PolicyName: 'cloudwatch-access-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:PutLogEvents'
+                  - 'logs:PutRetentionPolicy'
+                Resource: 
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*'
+        - PolicyName: 'S3-access-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource: 
+                  - !Sub 'arn:aws:s3:::dynamodb-export-to-s3-${AWS::Region}-${AWS::AccountId}/*'
+                  - !Sub 'arn:aws:s3:::dynamodb-export-to-s3-${AWS::Region}-${AWS::AccountId}'

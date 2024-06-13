@@ -436,6 +436,8 @@ class DynamoDBInitialLoadAndCDC:
         for index in describe_table_response['Table'].get(GSI, []):
             gsi = {x: index[x] for x in SI_ATTRIBUTES}
             # GSI has optional RCU/WCU
+            if "ProvisionedThroughput" in index:
+                gsi["ProvisionedThroughput"] = {}
             if index.get("ProvisionedThroughput", {}).get(RCU, None):
                 gsi["ProvisionedThroughput"][RCU] = index["ProvisionedThroughput"][RCU]
             if index.get("ProvisionedThroughput", {}).get(WCU, None):
@@ -453,6 +455,7 @@ class DynamoDBInitialLoadAndCDC:
         status = ttl_response.get("TimeToLiveDescription", {}).get("TimeToLiveStatus", None)
         enabled = status and status.startswith("ENABL")
         if enabled:
+            result[TTL_SPEC_KEY] = {}
             result[TTL_SPEC_KEY]["Enabled"] = enabled
             result[TTL_SPEC_KEY]["AttributeName"] = ttl_response["TimeToLiveDescription"]["AttributeName"]
 

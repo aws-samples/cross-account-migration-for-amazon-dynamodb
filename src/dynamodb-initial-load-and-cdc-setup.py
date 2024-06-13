@@ -425,7 +425,7 @@ class DynamoDBInitialLoadAndCDC:
         }
 
         local_secondary_indexes = []
-        for index in describe_table_response['Table'].get(LSI, [{}]):
+        for index in describe_table_response['Table'].get(LSI, []):
             # Append filtered index attributes to LSI property
             local_secondary_indexes.append({x: index[x] for x in SI_ATTRIBUTES})
 
@@ -433,7 +433,7 @@ class DynamoDBInitialLoadAndCDC:
             result[SCHEMA_SPEC_KEY][LSI] = local_secondary_indexes
 
         global_secondary_indexes = []
-        for index in describe_table_response['Table'].get(GSI, [{}]):
+        for index in describe_table_response['Table'].get(GSI, []):
             gsi = {x: index[x] for x in SI_ATTRIBUTES}
             # GSI has optional RCU/WCU
             if index.get("ProvisionedThroughput", {}).get(RCU, None):

@@ -19,7 +19,7 @@ Parameters:
   SourceUserOrRoleName:
     Type: String
     Description: 'The name of the principal user or role in the source account'
-  
+
 
 Conditions:
   IsUser:
@@ -85,14 +85,14 @@ Resources:
             Effect: Allow
             Principal:
               Service: logging.s3.amazonaws.com
-            Resource: !Join 
+            Resource: !Join
               - ''
               - - 'arn:aws:s3:::'
                 - !Ref LoggingBucket
                 - /*
             Condition:
               ArnLike:
-                'aws:SourceArn': !GetAtt 
+                'aws:SourceArn': !GetAtt
                   - S3Bucket
                   - Arn
               StringEquals:
@@ -106,7 +106,7 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: 
+              AWS:
                 - !If [IsUser, !Sub 'arn:aws:iam::${SourceAWSAccountNumber}:user/${SourceUserOrRoleName}', !Sub 'arn:aws:iam::${SourceAWSAccountNumber}:role/${SourceUserOrRoleName}']
             Action:
               - 'sts:AssumeRole'
@@ -122,7 +122,8 @@ Resources:
                   - 'dynamodb:DescribeTable'
                   - 'dynamodb:DescribeImport'
                   - 'dynamodb:PutResourcePolicy'
-                Resource: 
+                  - 'dynamodb:UpdateTimeToLive'
+                Resource:
                   - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TargetDynamoDBTableName}'
                   - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TargetDynamoDBTableName}/import/*'
         - PolicyName: 'cloudwatch-access-policy'
@@ -137,7 +138,7 @@ Resources:
                   - 'logs:DescribeLogStreams'
                   - 'logs:PutLogEvents'
                   - 'logs:PutRetentionPolicy'
-                Resource: 
+                Resource:
                   - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*'
         - PolicyName: 'S3-access-policy'
           PolicyDocument:
@@ -147,6 +148,6 @@ Resources:
                 Action:
                   - 's3:GetObject'
                   - 's3:ListBucket'
-                Resource: 
+                Resource:
                   - !Sub 'arn:aws:s3:::dynamodb-export-to-s3-${AWS::Region}-${AWS::AccountId}/*'
                   - !Sub 'arn:aws:s3:::dynamodb-export-to-s3-${AWS::Region}-${AWS::AccountId}'

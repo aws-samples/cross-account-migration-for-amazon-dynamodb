@@ -12,6 +12,10 @@ This project aims to facilitate zero-downtime cross-account migration of Amazon 
 - AWS CLI (Command Line Interface) configured with appropriate credentials.
 - Enable Point-in-Time Recovery (PITR) on the source Amazon DynamoDB table.
 
+## Limitations
+- Global Secondary Index (GSI) read capacity: A GSI read capacity argument is required if the source table has GSI and the source table is using on demand capacity.
+- Read capacity for multiple GSIs:  Only one GSI read capacity can be provided.  Use the maximum of all GSI read capacities.
+- Write capacity for multiple GSIs:  Only one GSI write capacity can be provided.  Use the maximum of all GSI write capacities.
 
 ## Getting Started
 1. Clone the git repository.
@@ -66,6 +70,8 @@ python dynamodb-initial-load-and-cdc-setup.py \
 * `--target-role-name` (default: "cross_account_assume_role"): Target role name
 * `--target-table-read-capacity` (required): Read capacity of the target DynamoDB table
 * `--target-table-write-capacity` (required): Write capacity of the target DynamoDB table
+* `--target-gsi-read-capacity`: Read capacity of the target DynamoDB GSI (applies to all GSIs).
+* `--target-gsi-write-capacity`: Write capacity of the target DynamoDB GSI (applies to all GSIs).  GSI write capacity will default to table write capacity if not specified
 * `--cdc-lambda-function-name` (default: "dynamodb-cross-account-cdc-lambda-function"): Name of the CDC Lambda function
 * `--lambda-event-source-batch-size` (default: 100): The maximum number of records in each batch that Lambda pulls from DynamoDB stream
 

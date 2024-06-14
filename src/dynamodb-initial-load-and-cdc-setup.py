@@ -50,6 +50,8 @@ class DynamoDBInitialLoadAndCDC:
         parser.add_argument("--target-role-name", required=False, default="cross_account_assume_role", help="Target role name")
         parser.add_argument("--target-table-read-capacity", required=True, help="Read capacity of the target DynamoDB table")
         parser.add_argument("--target-table-write-capacity", required=True, help="Write capacity of the target DynamoDB table")
+        parser.add_argument("--target-gsi-read-capacity", required=False, help="Read capacity of the target DynamoDB GSI (applies to all GSIs)")
+        parser.add_argument("--target-gsi-write-capacity", required=False, help="Write capacity of the target DynamoDB GSI (applies to all GSIs)")
         parser.add_argument("--cdc-lambda-function-name", required=False, default="dynamodb-cross-account-cdc-lambda-function", help="Name of the CDC Lambda function")
         parser.add_argument("--lambda-event-source-batch-size", required=False, default=100, help="The maximum number of records in each batch that Lambda pulls from DynamoDB stream")
 
@@ -98,6 +100,8 @@ class DynamoDBInitialLoadAndCDC:
 
         self.target_table_read_capacity = int(args.target_table_read_capacity)
         self.target_table_write_capacity = int(args.target_table_write_capacity)
+        self.target_gsi_read_capacity = int(args.target_gsi_read_capacity) if args.target_gsi_read_capacity is not None else None
+        self.target_gsi_write_capacity = int(args.target_gsi_write_capacity) if args.target_gsi_write_capacity is not None else None
         self.cdc_lambda_function_name = args.cdc_lambda_function_name
         self.lambda_event_source_batch_size = int(args.lambda_event_source_batch_size)
 
@@ -432,17 +436,29 @@ class DynamoDBInitialLoadAndCDC:
         if local_secondary_indexes:
             result[SCHEMA_SPEC_KEY][LSI] = local_secondary_indexes
 
+        # TODO:
+        # If the GSI has provisioned capacity, use those values
+        # Add optional arguments for GSI RCU and WCU
+        # If we find a GSI, that will make the GSI RCU value required (i.e. fail here if missing)
+        # If no GSI WCU is present, use the base table WCU
+        # Update documentation for all of the above
         global_secondary_indexes = []
         for index in describe_table_response['Table'].get(GSI, []):
             gsi = {x: index[x] for x in SI_ATTRIBUTES}
-            # GSI has optional RCU/WCU
-            if "ProvisionedThroughput" in index:
-                gsi["ProvisionedThroughput"] = {}
-            if index.get("ProvisionedThroughput", {}).get(RCU, None):
-                gsi["ProvisionedThroughput"][RCU] = index["ProvisionedThroughput"][RCU]
-            if index.get("ProvisionedThroughput", {}).get(WCU, None):
-                gsi["ProvisionedThroughput"][WCU] = index["ProvisionedThroughput"][WCU]
+            # Start with RCU/WCU from source GSI
+            gsi_rcu = index.get("ProvisionedThroughput", {}).get(RCU, None)
+            gsi_wcu = index.get("ProvisionedThroughput", {}).get(WCU, None)
+            # Apply RCU/WCU business logic
+            gsi_rcu = gsi_rcu or self.target_gsi_read_capacity
+            gsi_wcu = gsi_wcu or self.target_gsi_write_capacity or self.target_table_write_capacity
 
+            if not gsi_rcu:
+                raise ValueError(f"GSI {gsi['IndexName']} does not have a provisioned RCU value")
+
+            gsi["ProvisionedThroughput"] = {
+                RCU: gsi_rcu,
+                WCU: gsi_wcu,
+            }
             global_secondary_indexes.append(gsi)
 
         if global_secondary_indexes:

@@ -436,12 +436,6 @@ class DynamoDBInitialLoadAndCDC:
         if local_secondary_indexes:
             result[SCHEMA_SPEC_KEY][LSI] = local_secondary_indexes
 
-        # TODO:
-        # If the GSI has provisioned capacity, use those values
-        # Add optional arguments for GSI RCU and WCU
-        # If we find a GSI, that will make the GSI RCU value required (i.e. fail here if missing)
-        # If no GSI WCU is present, use the base table WCU
-        # Update documentation for all of the above
         global_secondary_indexes = []
         for index in describe_table_response['Table'].get(GSI, []):
             gsi = {x: index[x] for x in SI_ATTRIBUTES}

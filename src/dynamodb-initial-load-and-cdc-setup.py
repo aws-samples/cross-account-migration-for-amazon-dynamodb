@@ -4,8 +4,20 @@ import logging
 import argparse
 import time
 from datetime import datetime,timedelta
+from typing import Any, Dict
 import pytz
 from botocore.exceptions import ClientError
+
+# Constants used as key names
+SCHEMA_SPEC_KEY = "schema"
+TTL_SPEC_KEY = "ttl"
+# Constants present in table definition
+RCU = "ReadCapacityUnits"
+WCU = "WriteCapacityUnits"
+GSI = "GlobalSecondaryIndexes"
+LSI = "LocalSecondaryIndexes"
+# Common attributes for LSI and GSI
+SI_ATTRIBUTES = set(["IndexName", "KeySchema", "Projection"])
 
 # Initialize Logger
 logger = logging.getLogger()
@@ -36,12 +48,10 @@ class DynamoDBInitialLoadAndCDC:
         parser.add_argument("--target-account-id", required=True, help="Target AWS account ID")
         parser.add_argument("--target-s3-bucket-name", required=False, help="Target S3 bucket name")
         parser.add_argument("--target-role-name", required=False, default="cross_account_assume_role", help="Target role name")
-        parser.add_argument("--target-table-pk-name", required=False, help="Primary key name of the target DynamoDB table")
-        parser.add_argument("--target-table-sk-name", required=False, help="Sort key name of the target DynamoDB table")
-        parser.add_argument("--target-table-pk-type", required=False, help="Primary key type of the target DynamoDB table")
-        parser.add_argument("--target-table-sk-type", required=False, help="Sort key type of the target DynamoDB table")
         parser.add_argument("--target-table-read-capacity", required=True, help="Read capacity of the target DynamoDB table")
         parser.add_argument("--target-table-write-capacity", required=True, help="Write capacity of the target DynamoDB table")
+        parser.add_argument("--target-gsi-read-capacity", required=False, help="Read capacity of the target DynamoDB GSI (applies to all GSIs)")
+        parser.add_argument("--target-gsi-write-capacity", required=False, help="Write capacity of the target DynamoDB GSI (applies to all GSIs)")
         parser.add_argument("--cdc-lambda-function-name", required=False, default="dynamodb-cross-account-cdc-lambda-function", help="Name of the CDC Lambda function")
         parser.add_argument("--lambda-event-source-batch-size", required=False, default=100, help="The maximum number of records in each batch that Lambda pulls from DynamoDB stream")
 
@@ -53,7 +63,7 @@ class DynamoDBInitialLoadAndCDC:
             session = boto3.session.Session()
             self.source_region = session.region_name
         else:
-            self.source_region = args.source_region 
+            self.source_region = args.source_region
 
         # create a DynamoDB client object for the source region
         self.dynamodb = boto3.client('dynamodb', region_name=self.source_region)
@@ -88,14 +98,10 @@ class DynamoDBInitialLoadAndCDC:
         target_role_name = args.target_role_name
         self.target_role_arn = f"arn:aws:iam::{self.target_account_id}:role/{target_role_name}"
 
-        # if any of target table attribute is not provided, use the source table for the missing attributes
-        self.target_table_pk_name = args.target_table_pk_name if args.target_table_pk_name is not None else self.desc_src_tab_response['Table']['KeySchema'][0]['AttributeName']
-        self.target_table_sk_name = args.target_table_sk_name if args.target_table_sk_name is not None else self.desc_src_tab_response['Table']['KeySchema'][1]['AttributeName']
-        self.target_table_pk_type = args.target_table_pk_type if args.target_table_pk_type is not None else self.desc_src_tab_response['Table']['AttributeDefinitions'][0]['AttributeType']
-        self.target_table_sk_type = args.target_table_sk_type if args.target_table_sk_type is not None else self.desc_src_tab_response['Table']['AttributeDefinitions'][1]['AttributeType']
-        
         self.target_table_read_capacity = int(args.target_table_read_capacity)
         self.target_table_write_capacity = int(args.target_table_write_capacity)
+        self.target_gsi_read_capacity = int(args.target_gsi_read_capacity) if args.target_gsi_read_capacity is not None else None
+        self.target_gsi_write_capacity = int(args.target_gsi_write_capacity) if args.target_gsi_write_capacity is not None else None
         self.cdc_lambda_function_name = args.cdc_lambda_function_name
         self.lambda_event_source_batch_size = int(args.lambda_event_source_batch_size)
 
@@ -128,7 +134,7 @@ class DynamoDBInitialLoadAndCDC:
         Returns:
             None
         '''
-        # check if DynamoDB streams is already enabled on the source table, if not then enable it  
+        # check if DynamoDB streams is already enabled on the source table, if not then enable it
         if ('StreamSpecification' not in self.desc_src_tab_response.get('Table')) or ( not self.desc_src_tab_response.get('Table').get('StreamSpecification','').get('StreamEnabled')):
             # enable DynamoDB stream on the source table
             response = self.dynamodb.update_table(
@@ -162,7 +168,7 @@ class DynamoDBInitialLoadAndCDC:
             logger.info("DynamoDB stream is already enabled on the source table")
             self.is_dynamodb_stream_enabled = True
             self.source_table_stream_arn = self.desc_src_tab_response['Table']['LatestStreamArn']
-    
+
     def export_dynamodb_table_to_s3(self):
         '''
         Export the source DynamoDB table to S3 bucket in the target account.
@@ -176,9 +182,9 @@ class DynamoDBInitialLoadAndCDC:
         self.s3_prefix = f"{current_time}-{self.source_table_name}-export"
 
         # create an export task to export the source DynamoDB table data to S3 bucket in target account
-        logger.info(f"Exporting DynamoDB {self.source_table_name} table to S3 location s3://{self.target_s3_bucket_name}/{self.s3_prefix} " 
+        logger.info(f"Exporting DynamoDB {self.source_table_name} table to S3 location s3://{self.target_s3_bucket_name}/{self.s3_prefix} "
                     f"in the target account")
-       
+
         # If the source table already has a DynamoDB stream enabled, export the table with the latest timestamp
         if self.is_dynamodb_stream_enabled:
             response = self.dynamodb.export_table_to_point_in_time(
@@ -216,7 +222,7 @@ class DynamoDBInitialLoadAndCDC:
             else:
                 logger.info(f"Export task status is {response['ExportDescription']['ExportStatus']} , waiting for 30 seconds to complete")
                 time.sleep(30)
-            
+
         if response['ExportDescription']['ExportStatus'] == 'COMPLETED':
             logger.info(f"DynamoDB {self.source_table_name} table is exported to S3")
         else:
@@ -262,15 +268,19 @@ class DynamoDBInitialLoadAndCDC:
 
     def import_data_from_s3_to_dynamodb(self):
         '''
-        Import data from S3 to the target DynamoDB table in the target account. After the import completes, 
+        Import data from S3 to the target DynamoDB table in the target account. After the import completes,
         establish a resource-based policy on the target table to grant write access to the CDC AWS Lambda function.
-        
+
         Parameters:
             None
         Returns:
             None
         '''
-       # assume target role
+        source_table_specs = self.describe_source_table()
+        if self.target_table_name:
+            source_table_specs[SCHEMA_SPEC_KEY]["TableName"] = self.target_table_name
+
+        # assume target role
         target_role_credentials = self.assume_target_role()
 
         # get the latest S3 key prefix
@@ -281,7 +291,7 @@ class DynamoDBInitialLoadAndCDC:
                                 aws_access_key_id=target_role_credentials['AccessKeyId'],
                                 aws_secret_access_key=target_role_credentials['SecretAccessKey'],
                                 aws_session_token=target_role_credentials['SessionToken'])
-        
+
         # import data from S3 to DynamoDB table in target account
         logger.info(f"Importing DynamoDB table {self.source_table_name} in target account from S3 location s3://{self.target_s3_bucket_name}/{S3KeyPrefix}")
         response = dynamodb.import_table(
@@ -291,37 +301,10 @@ class DynamoDBInitialLoadAndCDC:
             },
             InputFormat = 'DYNAMODB_JSON',
             InputCompressionType = 'GZIP',
-            TableCreationParameters = {
-                'TableName': self.target_table_name,
-                'KeySchema': [
-                    {
-                        'AttributeName': self.target_table_pk_name,
-                        'KeyType': 'HASH'
-                    },
-                    {
-                        'AttributeName': self.target_table_sk_name,
-                        'KeyType': 'RANGE'
-                    }
-                ],
-                'AttributeDefinitions': [
-                    {
-                        'AttributeName': self.target_table_pk_name,
-                        'AttributeType': self.target_table_pk_type
-                    },
-                    {
-                        'AttributeName': self.target_table_sk_name,
-                        'AttributeType': self.target_table_sk_type
-                    }
-                ],
-                'ProvisionedThroughput': {
-                    'ReadCapacityUnits': self.target_table_read_capacity,
-                    'WriteCapacityUnits': self.target_table_write_capacity
-                }
-            },
-
+            TableCreationParameters = source_table_specs[SCHEMA_SPEC_KEY],
         )
 
-        # wait for the import task to complete by checking the status 
+        # wait for the import task to complete by checking the status
         while True:
             try:
                 response = dynamodb.describe_import(
@@ -350,7 +333,14 @@ class DynamoDBInitialLoadAndCDC:
             logger.info("Import is completed")
         else:
             logger.error(f"Import task failed with status {response['ImportTableDescription']['ImportStatus']}")
-            raise Exception(f"Import task failed with status {response['ImportTableDescription']['ImportStatus']}")     
+            raise Exception(f"Import task failed with status {response['ImportTableDescription']['ImportStatus']}")
+
+        # Key is only present if source table has a TTL
+        if TTL_SPEC_KEY in source_table_specs:
+            dynamodb.update_time_to_live(
+                TableName=self.target_table_name,
+                TimeToLiveSpecification=source_table_specs[TTL_SPEC_KEY],
+            )
 
         # Create a resource-based policy on the target DynamoDB table for the CDC AWS Lambda function.
         self.cdc_lambda_config = self.lambda_client.get_function_configuration(FunctionName=self.cdc_lambda_function_name)
@@ -375,8 +365,8 @@ class DynamoDBInitialLoadAndCDC:
         dynamodb.put_resource_policy(
                     ResourceArn=response['ImportTableDescription']['TableArn'],
                     Policy= policy_document_str
-                )             
-              
+                )
+
     def create_ddb_stream_lambda_trigger(self):
         '''
         Enables the DynamoDB trigger to the AWS Lambda function for CDC
@@ -415,6 +405,72 @@ class DynamoDBInitialLoadAndCDC:
         )
         logger.info(f"Created a Lambda function trigger on the DynamoDB stream of {self.source_table_name}")
 
+    def describe_source_table(self) -> Dict[str, Any]:
+        '''
+        Gets the table creation and TTL details via an inspection of the source table
+        Parameters:
+            None
+        Returns:
+            dict: The table creation and TTL details
+        '''
+        result: Dict[str, Any]= {}
+        describe_table_response = self.dynamodb.describe_table(
+            TableName=self.source_table_name
+        )
+        # Set required attributes
+        result[SCHEMA_SPEC_KEY] = {
+            x: describe_table_response['Table'][x] for x in ["TableName", "KeySchema", "AttributeDefinitions"]
+        }
+        # Hard-code to provisioned mode.  A future enhancement would be to multiply current RCU/WCU by 2 for prewarming
+        result[SCHEMA_SPEC_KEY]["BillingMode"] = "PROVISIONED"
+        result[SCHEMA_SPEC_KEY]["ProvisionedThroughput"] = {
+            "ReadCapacityUnits": self.target_table_read_capacity,
+            "WriteCapacityUnits": self.target_table_write_capacity,
+        }
+
+        local_secondary_indexes = []
+        for index in describe_table_response['Table'].get(LSI, []):
+            # Append filtered index attributes to LSI property
+            local_secondary_indexes.append({x: index[x] for x in SI_ATTRIBUTES})
+
+        if local_secondary_indexes:
+            result[SCHEMA_SPEC_KEY][LSI] = local_secondary_indexes
+
+        global_secondary_indexes = []
+        for index in describe_table_response['Table'].get(GSI, []):
+            gsi = {x: index[x] for x in SI_ATTRIBUTES}
+            # Start with RCU/WCU from source GSI
+            gsi_rcu = index.get("ProvisionedThroughput", {}).get(RCU, None)
+            gsi_wcu = index.get("ProvisionedThroughput", {}).get(WCU, None)
+            # Apply RCU/WCU business logic
+            gsi_rcu = gsi_rcu or self.target_gsi_read_capacity
+            gsi_wcu = gsi_wcu or self.target_gsi_write_capacity or self.target_table_write_capacity
+
+            if not gsi_rcu:
+                raise ValueError(f"GSI {gsi['IndexName']} does not have a provisioned RCU value")
+
+            gsi["ProvisionedThroughput"] = {
+                RCU: gsi_rcu,
+                WCU: gsi_wcu,
+            }
+            global_secondary_indexes.append(gsi)
+
+        if global_secondary_indexes:
+            result[SCHEMA_SPEC_KEY][GSI] = global_secondary_indexes
+
+        # Get TTL details (if any)
+        ttl_response = self.dynamodb.describe_time_to_live(
+            TableName=self.source_table_name
+        )
+        status = ttl_response.get("TimeToLiveDescription", {}).get("TimeToLiveStatus", None)
+        enabled = status and status.startswith("ENABL")
+        if enabled:
+            result[TTL_SPEC_KEY] = {}
+            result[TTL_SPEC_KEY]["Enabled"] = enabled
+            result[TTL_SPEC_KEY]["AttributeName"] = ttl_response["TimeToLiveDescription"]["AttributeName"]
+
+        return result
+
 
 if __name__ == "__main__":
     # create DynamoDBInitialLoadAndCDC object
@@ -424,7 +480,7 @@ if __name__ == "__main__":
     # check if PITR is enabled
     if not ddb_initial_load_and_cdc.check_if_PITR_enabled():
         raise ValueError("PITR is disabled on the source table. Enable PITR before starting the migration")
-    
+
     # enable DynamoDB stream on the source table
     ddb_initial_load_and_cdc.enable_dynamodb_stream_on_source_table()
 

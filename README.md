@@ -13,15 +13,16 @@ This project aims to facilitate zero-downtime cross-account migration of Amazon 
 - Enable Point-in-Time Recovery (PITR) on the source Amazon DynamoDB table.
 
 ## Limitations
-- Global Secondary Index (GSI) Creation: This version of the code does not currently support the creation of Global Secondary Indexes (GSIs) during the import process. If the source table contains GSIs, they must be created explicitly after the import is completed. GSI support will be implemented in future updates.
-- Time to Live (TTL) Enablement: Please note that Time to Live (TTL) must be explicitly enabled on the target table if the source table had TTL configured.
+- Global Secondary Index (GSI) read capacity: A GSI read capacity argument is required if the source table has GSI and the source table is using on demand capacity.
+- Read capacity for multiple GSIs:  Only one GSI read capacity can be provided.  Use the maximum of all GSI read capacities.
+- Write capacity for multiple GSIs:  Only one GSI write capacity can be provided.  Use the maximum of all GSI write capacities.
 
 ## Getting Started
 1. Clone the git repository.
 2. Create a zip file for AWS Lambda function:
 ```bash
-cd src         
-pip install -r requirements.txt --target ./lambda-code      
+cd src
+pip install -r requirements.txt --target ./lambda-code
 cp dynamodb-cross-account-cdc-lambda-function.py lambda-code
 cd lambda-code
 zip -r function.zip .
@@ -38,7 +39,7 @@ rm -r lambda-code
 
 
 ## Usage
-To initiate the migration, execute the src/dynamodb-initial-load-and-cdc-setup.py script in your terminal with the user or role you specified in the CloudFormation template. 
+To initiate the migration, execute the src/dynamodb-initial-load-and-cdc-setup.py script in your terminal with the user or role you specified in the CloudFormation template.
 ```bash
 python dynamodb-initial-load-and-cdc-setup.py \
 --source-region <source-region> \
@@ -49,10 +50,6 @@ python dynamodb-initial-load-and-cdc-setup.py \
 --target-account-id <target-account-id> \
 --target-s3-bucket-name <target-s3-bucket-name> \
 --target-role-name <target-role-name> \
---target-table-pk-name <target-table-pk-name> \
---target-table-sk-name <target-table-sk-name> \
---target-table-pk-type <target-table-pk-type> \
---target-table-sk-type <target-table-sk-type> \
 --target-table-read-capacity <target-table-read-capacity> \
 --target-table-write-capacity <target-table-write-capacity> \
 --cdc-lambda-function-name <cdc-lambda-function-name> \
@@ -71,12 +68,10 @@ python dynamodb-initial-load-and-cdc-setup.py \
 * `--target-account-id` (required): Target AWS account ID
 * `--target-s3-bucket-name`: Target S3 bucket name (default: dynamodb-export-to-s3-target-region-target-account-id)
 * `--target-role-name` (default: "cross_account_assume_role"): Target role name
-* `--target-table-pk-name`: Primary key name of the target DynamoDB table (default: Primary key name of the source table)
-* `--target-table-sk-name`: Sort key name of the target DynamoDB table (default: Sort key name of the source table)
-* `--target-table-pk-type`: Primary key type of the target DynamoDB table (default: Primary key type of the source table)
-* `--target-table-sk-type`: Sort key type of the target DynamoDB table (default: Sort key type of the source table)
 * `--target-table-read-capacity` (required): Read capacity of the target DynamoDB table
 * `--target-table-write-capacity` (required): Write capacity of the target DynamoDB table
+* `--target-gsi-read-capacity`: Read capacity of the target DynamoDB GSI (applies to all GSIs).
+* `--target-gsi-write-capacity`: Write capacity of the target DynamoDB GSI (applies to all GSIs).  GSI write capacity will default to table write capacity if not specified
 * `--cdc-lambda-function-name` (default: "dynamodb-cross-account-cdc-lambda-function"): Name of the CDC Lambda function
 * `--lambda-event-source-batch-size` (default: 100): The maximum number of records in each batch that Lambda pulls from DynamoDB stream
 

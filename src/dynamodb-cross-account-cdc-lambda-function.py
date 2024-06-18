@@ -48,8 +48,6 @@ def lambda_handler(event, context):
                         response = dynamodb.delete_item(TableName=target_table_arn, Key=record['dynamodb']['Keys'])
                     else:
                         response = dynamodb.put_item(TableName=target_table_arn, Item=record['dynamodb']['NewImage'])
-                        logger.info("sending message to SQS for testing")
-                        add_failed_event_to_sqs(sqs_queue_for_failed_events, record, 'testing')
                 except ClientError as e:
                     logger.exception("An error occurred: %s", e)
                     # add failed event to SQS queue with error message

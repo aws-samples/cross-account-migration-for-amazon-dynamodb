@@ -39,7 +39,8 @@ rm -r lambda-code
 
 
 ## Usage
-To initiate the migration, execute the src/dynamodb-initial-load-and-cdc-setup.py script in your terminal with the user or role you specified in the CloudFormation template.
+To initiate the migration, execute the src/dynamodb-initial-load-and-cdc-setup.py script in your terminal with the user or role you specified in the CloudFormation template. Ensure this script is run from the source account.
+
 ```bash
 python dynamodb-initial-load-and-cdc-setup.py \
 --source-region <source-region> \
@@ -56,9 +57,6 @@ python dynamodb-initial-load-and-cdc-setup.py \
 --lambda-event-source-batch-size <lambda-event-source-batch-size>
 ```
 
-![demo-usage](images/demo-usage.gif)
-
-
 ### Argument Details
 * `--source-region` (required): Region of the source DynamoDB table
 * `--source-table-name` (required): Source DynamoDB table name
@@ -74,6 +72,10 @@ python dynamodb-initial-load-and-cdc-setup.py \
 * `--target-gsi-write-capacity`: Write capacity of the target DynamoDB GSI (applies to all GSIs).  GSI write capacity will default to table write capacity if not specified
 * `--cdc-lambda-function-name` (default: "dynamodb-cross-account-cdc-lambda-function"): Name of the CDC Lambda function
 * `--lambda-event-source-batch-size` (default: 100): The maximum number of records in each batch that Lambda pulls from DynamoDB stream
+
+
+![demo-usage](images/demo-usage.gif)
+
 
 Above script will perform the initial load and then set up the CDC for the ongoing replication.
 

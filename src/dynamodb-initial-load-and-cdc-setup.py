@@ -70,6 +70,9 @@ class DynamoDBInitialLoadAndCDC:
         # create lambda client
         self.lambda_client = boto3.client('lambda', region_name=self.source_region)
 
+        # create a DynamoDBStreams client object for the source region
+        self.dynamodbstreams = boto3.client('dynamodbstreams', region_name=self.source_region)
+        
         # check if source table exists
         self.source_table_name = args.source_table_name
         try:
@@ -92,7 +95,7 @@ class DynamoDBInitialLoadAndCDC:
         self.target_table_name = args.target_table_name if args.target_table_name is not None else self.source_table_name
 
         self.target_account_id = args.target_account_id
-        self.target_s3_bucket_name = args.target_s3_bucket_name if args.target_table_name is not None else f"dynamodb-export-to-s3-{self.target_region}-{self.target_account_id}"
+        self.target_s3_bucket_name = args.target_s3_bucket_name if args.target_s3_bucket_name is not None else f"dynamodb-export-to-s3-{self.target_region}-{self.target_account_id}"
 
         # get the target role ARN
         target_role_name = args.target_role_name
@@ -137,7 +140,7 @@ class DynamoDBInitialLoadAndCDC:
         # check if DynamoDB streams is already enabled on the source table, if not then enable it
         if ('StreamSpecification' not in self.desc_src_tab_response.get('Table')) or ( not self.desc_src_tab_response.get('Table').get('StreamSpecification','').get('StreamEnabled')):
             # enable DynamoDB stream on the source table
-            response = self.dynamodb.update_table(
+            upd_table_response = self.dynamodb.update_table(
             TableName=self.source_table_name,
             StreamSpecification={
                 'StreamEnabled': True,
@@ -145,21 +148,18 @@ class DynamoDBInitialLoadAndCDC:
             }
             )
 
+            # wait for DynamoDB streams to be enabled
+            while True:
+                ddb_streams_response = self.dynamodbstreams.describe_stream(
+                    StreamArn=upd_table_response['TableDescription']['LatestStreamArn']
+                )
+                if ddb_streams_response['StreamDescription']['StreamStatus'] == 'ENABLED':
+                    # get the stream enabled timestamp in epoch time
+                    self.dynamodb_stream_enabled_ts = int(time.time()) 
+                    break
+    
             # get the stream ARN
-            self.source_table_stream_arn = response['TableDescription']['LatestStreamArn']
-
-            timestamp_str = self.source_table_stream_arn.split('/')[-1]
-
-            # Convert the timestamp string to a datetime object
-            timestamp_without_ms = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S.%f").strftime("%Y-%m-%dT%H:%M:%S")
-            timestamp = datetime.strptime(timestamp_without_ms, "%Y-%m-%dT%H:%M:%S")
-
-
-            # Set the timezone to UTC
-            timestamp = timestamp.replace(tzinfo=pytz.UTC)
-
-            # Convert the datetime object to a Unix timestamp
-            self.dynamodb_stream_enabled_ts = int(timestamp.timestamp())
+            self.source_table_stream_arn = upd_table_response['TableDescription']['LatestStreamArn']
 
             logger.info(f"Enabled DynamoDB stream on '{self.source_table_name}' and the stream ARN is '{self.source_table_stream_arn}'. The stream enabled at {self.dynamodb_stream_enabled_ts} epoch time")
 

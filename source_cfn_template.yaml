@@ -240,7 +240,7 @@ Resources:
   
 
 Outputs:
-  DynamoDBCDCFunctionArn:
-    Description: 'ARN of the DynamoDB CDC Lambda function'
-    Value: !GetAtt DynamodbCrossAccountCdcLambdaFunction.Arn
+  DynamoDBCDCFunction:
+    Description: 'DynamoDB CDC Lambda function name'
+    Value: !Ref DynamodbCrossAccountCdcLambdaFunction
   

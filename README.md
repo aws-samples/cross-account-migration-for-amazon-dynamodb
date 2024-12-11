@@ -64,7 +64,7 @@ python dynamodb-initial-load-and-cdc-setup.py \
 * `--target-region` (default: Same region as the source): Region of the target DynamoDB table
 * `--target-table-name` (default: Same name as the source table): Target DynamoDB table name
 * `--target-account-id` (required): Target AWS account ID
-* `--target-s3-bucket-name`:(default: dynamodb-export-to-s3-target-<region>-<target-account-id>): Target S3 bucket name
+* `--target-s3-bucket-name`:(default: dynamodb-export-to-s3-target-region-target-account-id): Target S3 bucket name
 * `--target-role-name` (default: "cross_account_assume_role"): Target role name
 * `--target-table-read-capacity` (required): Read capacity of the target DynamoDB table
 * `--target-table-write-capacity` (required): Write capacity of the target DynamoDB table

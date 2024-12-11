@@ -151,3 +151,8 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:s3:::dynamodb-export-to-s3-${AWS::Region}-${AWS::AccountId}/*'
                   - !Sub 'arn:aws:s3:::dynamodb-export-to-s3-${AWS::Region}-${AWS::AccountId}'
+
+Outputs:
+  CrossAccountRoleName:
+    Description: Name of the cross account assume role
+    Value: !Ref CrossAccountAssumeRole

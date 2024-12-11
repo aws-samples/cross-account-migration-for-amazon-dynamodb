@@ -95,7 +95,7 @@ class DynamoDBInitialLoadAndCDC:
         self.target_table_name = args.target_table_name if args.target_table_name is not None else self.source_table_name
 
         self.target_account_id = args.target_account_id
-        self.target_s3_bucket_name = args.target_s3_bucket_name if args.target_table_name is not None else f"dynamodb-export-to-s3-{self.target_region}-{self.target_account_id}"
+        self.target_s3_bucket_name = args.target_s3_bucket_name if args.target_s3_bucket_name is not None else f"dynamodb-export-to-s3-{self.target_region}-{self.target_account_id}"
 
         # get the target role ARN
         target_role_name = args.target_role_name

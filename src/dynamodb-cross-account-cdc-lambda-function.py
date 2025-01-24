@@ -1,6 +1,7 @@
 import os
 import json
 import boto3
+import base64
 from aws_lambda_powertools import Logger
 from botocore.exceptions import ClientError
 from datetime import datetime,timezone
@@ -19,6 +20,13 @@ target_table_arn = f"arn:aws:dynamodb:{target_ddb_region}:{target_aws_account_nu
 dynamodb = boto3.client('dynamodb', region_name=target_ddb_region)
 # Create SQS client object
 sqs = boto3.client('sqs')
+
+def decode_bytes_if_present(items_by_type: dict) -> None:
+    # Look for binary values, b64 decode them back into bytes
+    for key, value_dict in items_by_type.items():
+        for value_type, value in value_dict.items():
+            if value_type == "B":
+                items_by_type[key] = {value_type: base64.b64decode(value)}
 
 # Lambda function handler
 def lambda_handler(event, context):
@@ -47,7 +55,9 @@ def lambda_handler(event, context):
                     if event_name == 'REMOVE':
                         response = dynamodb.delete_item(TableName=target_table_arn, Key=record['dynamodb']['Keys'])
                     else:
-                        response = dynamodb.put_item(TableName=target_table_arn, Item=record['dynamodb']['NewImage'])
+                        ddb_item_to_put = record['dynamodb']['NewImage']
+                        decode_bytes_if_present(ddb_item_to_put)
+                        response = dynamodb.put_item(TableName=target_table_arn, Item=ddb_item_to_put)
                 except ClientError as e:
                     logger.exception("An error occurred: %s", e)
                     # add failed event to SQS queue with error message

@@ -165,6 +165,12 @@ Resources:
               - kms:GenerateDataKey
               - kms:Decrypt
             Resource: "*"
+          - Sid: EnableIAMPermissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"              
   DQLForFailedEvents:
       Type: 'AWS::SQS::Queue'
       Properties:
